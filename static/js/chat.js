@@ -7,30 +7,61 @@ class AgoraMultiChat {
         this.clearBtn = document.getElementById('clearBtn');
         this.loadingIndicator = document.getElementById('loadingIndicator');
         
-        // AI Character configurations
-        this.aiCharacters = {
-            'kora': {
-                name: 'Kora',
-                color: 'from-purple-500 to-blue-500',
-                textColor: 'text-purple-300',
-                icon: 'fas fa-leaf'
-            },
-            'sassi': {
-                name: 'Sassi',
-                color: 'from-pink-500 to-rose-500',
-                textColor: 'text-pink-300',
-                icon: 'fas fa-palette'
-            },
-            'riku': {
-                name: 'Riku',
-                color: 'from-green-500 to-emerald-500',
-                textColor: 'text-green-300',
-                icon: 'fas fa-brain'
-            }
-        };
+        // AI Character configurations (will be loaded from server)
+        this.aiCharacters = {};
         
+        this.initializeApp();
+    }
+
+    async initializeApp() {
+        await this.loadAvatarConfig();
         this.initializeEventListeners();
         this.loadConversationHistory();
+    }
+
+    async loadAvatarConfig() {
+        try {
+            const response = await fetch('/avatars');
+            const data = await response.json();
+            
+            if (data.avatars) {
+                // Convert server config to frontend format
+                this.aiCharacters = {};
+                for (const [key, config] of Object.entries(data.avatars)) {
+                    this.aiCharacters[key] = {
+                        name: config.name,
+                        color: config.color,
+                        textColor: config.text_color,
+                        icon: config.icon
+                    };
+                }
+                
+                console.log('Loaded avatar configuration:', this.aiCharacters);
+            }
+        } catch (error) {
+            console.error('Failed to load avatar configuration:', error);
+            // Fallback to default configuration
+            this.aiCharacters = {
+                'kora': {
+                    name: 'Kora',
+                    color: 'from-purple-500 to-blue-500',
+                    textColor: 'text-purple-300',
+                    icon: 'fas fa-leaf'
+                },
+                'sassi': {
+                    name: 'Sassi',
+                    color: 'from-pink-500 to-rose-500',
+                    textColor: 'text-pink-300',
+                    icon: 'fas fa-palette'
+                },
+                'riku': {
+                    name: 'Riku',
+                    color: 'from-green-500 to-emerald-500',
+                    textColor: 'text-green-300',
+                    icon: 'fas fa-brain'
+                }
+            };
+        }
     }
 
     initializeEventListeners() {
@@ -279,24 +310,7 @@ class AgoraMultiChat {
 
             if (response.ok) {
                 // Clear messages container but keep welcome message
-                this.messagesContainer.innerHTML = `
-                    <div class="message-bubble assistant-message">
-                        <div class="flex items-start space-x-3">
-                            <div class="avatar bg-gradient-to-br from-purple-500 to-blue-500">
-                                <i class="fas fa-leaf text-white"></i>
-                            </div>
-                            <div class="message-content">
-                                <div class="character-name text-purple-300 text-sm font-semibold mb-1">Kora</div>
-                                <div class="message-text">
-                                    Welcome to Agora Chat! We're Kora, Sassi, and Riku - your three AI companions. We'll each share our unique perspectives on your questions!
-                                </div>
-                                <div class="message-time">
-                                    Just now
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                `;
+                this.addWelcomeMessage();
                 
                 // Show success message briefly
                 this.showNotification('Conversation cleared successfully!', 'success');
@@ -305,6 +319,42 @@ class AgoraMultiChat {
             console.error('Error clearing conversation:', error);
             this.showNotification('Failed to clear conversation', 'error');
         }
+    }
+
+    addWelcomeMessage() {
+        // Get active avatar names for welcome message
+        const activeNames = Object.values(this.aiCharacters).map(char => char.name);
+        const namesText = activeNames.length > 1 
+            ? activeNames.slice(0, -1).join(', ') + ' and ' + activeNames.slice(-1)
+            : activeNames[0] || 'your AI companion';
+        
+        // Use the first available avatar for the welcome message
+        const firstAvatar = Object.keys(this.aiCharacters)[0];
+        const welcomeAvatar = firstAvatar ? this.aiCharacters[firstAvatar] : {
+            name: 'AI Assistant',
+            color: 'from-purple-500 to-blue-500',
+            textColor: 'text-purple-300',
+            icon: 'fas fa-robot'
+        };
+
+        this.messagesContainer.innerHTML = `
+            <div class="message-bubble assistant-message">
+                <div class="flex items-start space-x-3">
+                    <div class="avatar bg-gradient-to-br ${welcomeAvatar.color}">
+                        <i class="${welcomeAvatar.icon} text-white"></i>
+                    </div>
+                    <div class="message-content">
+                        <div class="character-name ${welcomeAvatar.textColor} text-sm font-semibold mb-1">${welcomeAvatar.name}</div>
+                        <div class="message-text">
+                            Welcome to Agora Chat! We're ${namesText} - your AI companion${activeNames.length > 1 ? 's' : ''}. We'll each share our unique perspectives on your questions!
+                        </div>
+                        <div class="message-time">
+                            Just now
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
     }
 
     async loadConversationHistory() {
@@ -324,15 +374,19 @@ class AgoraMultiChat {
                         // Create mock AI response object for history
                         const aiResponse = {
                             content: msg.content,
-                            character: msg.character || 'kora',
+                            character: msg.character || Object.keys(this.aiCharacters)[0],
                             order: 1
                         };
                         this.addAIMessage(aiResponse);
                     }
                 });
+            } else {
+                // Show welcome message if no history
+                this.addWelcomeMessage();
             }
         } catch (error) {
             console.error('Error loading conversation history:', error);
+            this.addWelcomeMessage();
         }
     }
 

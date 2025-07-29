@@ -1,11 +1,12 @@
 from flask import Flask, render_template, request, jsonify, session
-import openai
+from openai import OpenAI
 import os
 from dotenv import load_dotenv
 import uuid
 import markdown
 import random
 import time
+import re
 
 # Load environment variables
 load_dotenv()
@@ -13,30 +14,141 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
 
-# Configure OpenAI - Simple direct API key setting
-openai.api_key = os.getenv('OPENAI_API_KEY')
+# Configure OpenAI client
+try:
+    client = OpenAI(
+        api_key=os.getenv('OPENAI_API_KEY')
+    )
+except TypeError as e:
+    if 'proxies' in str(e):
+        # Handle proxy configuration issue
+        import httpx
+        client = OpenAI(
+            api_key=os.getenv('OPENAI_API_KEY'),
+            http_client=httpx.Client()
+        )
+    else:
+        raise e
 
-# AI Characters configuration
-AI_CHARACTERS = {
-    'kora': {
-        'name': 'Kora',
-        'prompt_file': 'prompts/kora_prompt.md',
-        'color': 'from-purple-500 to-blue-500',
-        'text_color': 'text-purple-300'
-    },
-    'sassi': {
-        'name': 'Sassi', 
-        'prompt_file': 'prompts/sassi_prompt.md',
-        'color': 'from-pink-500 to-rose-500',
-        'text_color': 'text-pink-300'
-    },
-    'riku': {
-        'name': 'Riku',
-        'prompt_file': 'prompts/riku_prompt.md', 
-        'color': 'from-green-500 to-emerald-500',
-        'text_color': 'text-green-300'
-    }
-}
+def load_avatar_config():
+    """Load avatar configuration from markdown file"""
+    try:
+        with open('avatar_config.md', 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        avatars = {}
+        
+        # Find the Avatar Settings section and only parse that
+        avatar_settings_start = content.find('## Avatar Settings')
+        config_notes_start = content.find('## Configuration Notes')
+        
+        if avatar_settings_start == -1:
+            return {}
+        
+        # Extract only the Avatar Settings section
+        if config_notes_start != -1:
+            avatar_section = content[avatar_settings_start:config_notes_start]
+        else:
+            # If no config notes section, look for examples section
+            examples_start = content.find('## Examples')
+            if examples_start != -1:
+                avatar_section = content[avatar_settings_start:examples_start]
+            else:
+                avatar_section = content[avatar_settings_start:]
+        
+        # Split avatar section by ### headers
+        sections = re.split(r'\n### ', avatar_section)
+        
+        for section in sections[1:]:  # Skip the first section (title)
+            lines = section.strip().split('\n')
+            if not lines:
+                continue
+                
+            # Get avatar key from header
+            avatar_key = lines[0].lower().strip()
+            
+            # Parse configuration
+            config = {
+                'active': True,
+                'name': avatar_key.title(),
+                'prompt_file': f'prompts/{avatar_key}_prompt.md',
+                'color': 'from-gray-500 to-gray-600',
+                'text_color': 'text-gray-300',
+                'icon': 'fas fa-robot',
+                'allow_followups': True,
+                'speaker_order': 999  # Default to high number for unspecified order
+            }
+            
+            # Parse markdown list items
+            for line in lines[1:]:
+                line = line.strip()
+                if line.startswith('- **') and '**:' in line:
+                    # Extract key and value from markdown
+                    match = re.match(r'- \*\*(.*?)\*\*:\s*(.*)', line)
+                    if match:
+                        key, value = match.groups()
+                        key = key.lower().replace(' ', '_').replace('-', '_')
+                        
+                        # Parse boolean values
+                        if value.lower() in ['true', 'false']:
+                            value = value.lower() == 'true'
+                        # Parse numeric values for speaker_order
+                        elif key == 'speaker_order':
+                            try:
+                                value = int(value)
+                            except ValueError:
+                                # If not a valid number, keep default
+                                continue
+                        
+                        config[key] = value
+            
+            # Only include active avatars
+            if config.get('active', True):
+                avatars[avatar_key] = config
+        
+        return avatars
+        
+    except FileNotFoundError:
+        # Fallback to default configuration
+        print("Warning: avatar_config.md not found, using defaults")
+        return {
+            'kora': {
+                'active': True,
+                'name': 'Kora',
+                'prompt_file': 'prompts/kora_prompt.md',
+                'color': 'from-purple-500 to-blue-500',
+                'text_color': 'text-purple-300',
+                'icon': 'fas fa-leaf',
+                'allow_followups': True,
+                'speaker_order': 1
+            },
+            'sassi': {
+                'active': True,
+                'name': 'Sassi', 
+                'prompt_file': 'prompts/sassi_prompt.md',
+                'color': 'from-pink-500 to-rose-500',
+                'text_color': 'text-pink-300',
+                'icon': 'fas fa-palette',
+                'allow_followups': True,
+                'speaker_order': 2
+            },
+            'riku': {
+                'active': True,
+                'name': 'Riku',
+                'prompt_file': 'prompts/riku_prompt.md', 
+                'color': 'from-green-500 to-emerald-500',
+                'text_color': 'text-green-300',
+                'icon': 'fas fa-brain',
+                'allow_followups': True,
+                'speaker_order': 3
+            }
+        }
+    except Exception as e:
+        print(f"Error loading avatar config: {e}")
+        return {}
+
+# Load AI Characters configuration from markdown file
+AI_CHARACTERS = load_avatar_config()
 
 def load_ai_prompt(character):
     """Load the system prompt for a specific AI character"""
@@ -107,7 +219,7 @@ def get_ai_follow_up_response(character, mentioning_character, mentioning_messag
     messages.extend(conversation_history)
     
     # Call OpenAI API
-    response = openai.ChatCompletion.create(
+    response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=messages,
         max_tokens=400,  # Shorter for follow-ups
@@ -116,11 +228,16 @@ def get_ai_follow_up_response(character, mentioning_character, mentioning_messag
     
     return response.choices[0].message.content
 
-def get_random_ai_order():
-    """Get a random order for AI responses"""
-    characters = list(AI_CHARACTERS.keys())
-    random.shuffle(characters)
-    return characters
+def get_ai_order():
+    """Get AI response order based on speaker_order configuration"""
+    # Sort active characters by their speaker_order
+    active_characters = [(key, config) for key, config in AI_CHARACTERS.items() 
+                        if config.get('active', True)]
+    
+    # Sort by speaker_order, then by key name as fallback
+    active_characters.sort(key=lambda x: (x[1].get('speaker_order', 999), x[0]))
+    
+    return [char[0] for char in active_characters]
 
 def get_conversation_history():
     """Get conversation history from session"""
@@ -156,8 +273,8 @@ def chat():
         # Add user message to conversation (as Boss)
         add_to_conversation("user", user_message, "boss")
         
-        # Get random order for AI responses
-        ai_order = get_random_ai_order()
+        # Get AI responses in configured speaker order
+        ai_order = get_ai_order()
         
         # Store all AI responses for this turn
         ai_responses = []
@@ -180,7 +297,7 @@ def chat():
             messages.extend(conversation)
             
             # Call OpenAI API for this specific AI
-            response = openai.ChatCompletion.create(
+            response = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=messages,
                 max_tokens=800,
@@ -238,6 +355,10 @@ def chat():
                 
                 # Skip if we already processed this character's follow-up
                 if mentioned_char in processed_mentions:
+                    continue
+                
+                # Skip if this character doesn't allow follow-ups
+                if not AI_CHARACTERS.get(mentioned_char, {}).get('allow_followups', True):
                     continue
                     
                 processed_mentions.add(mentioned_char)
@@ -297,6 +418,11 @@ def clear_conversation():
 def get_history():
     """Get conversation history"""
     return jsonify({'conversation': get_conversation_history()})
+
+@app.route('/avatars', methods=['GET'])
+def get_avatars():
+    """Get avatar configuration"""
+    return jsonify({'avatars': AI_CHARACTERS})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=7632, debug=True)
